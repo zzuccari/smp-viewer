@@ -28,11 +28,14 @@
 </head>
 <body>
 <h1>3Flex SMP viewer</h1>
-<p class="sub">Reads Micromeritics 3Flex .SMP files in your browser. The file is not uploaded anywhere.</p>
+<p class="sub">Reads Micromeritics 3Flex .SMP files in your browser. Files are not uploaded anywhere.</p>
 
-<div id="drop">Drop a .SMP file here or <button id="pick">Choose file</button> <span id="fname"></span><input type="file" id="file" accept=".smp,.SMP" hidden></div>
+<div id="drop">Drop one or more .SMP files here or <button id="pick">Choose files</button><input type="file" id="file" accept=".smp,.SMP" multiple hidden></div>
 
 <div class="bar">
+  <label>File: <select id="active"></select></label>
+  <button id="remove">Remove</button>
+  <button id="clear">Clear all</button>
   <button id="copy">Copy table</button>
   <label><input type="checkbox" id="headers"> with headers</label>
   <label>X: <select id="x"></select></label>
@@ -54,7 +57,9 @@
 <script src="smp.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-let data = null, shown = [], chart = null;
+const COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"];
+// loaded files: {name, rows, info, mass (g, from file), mg (current)}
+let files = [], shown = [], chart = null;
 
 for (const c of COLS.slice(0, 3)) $("x").add(new Option(c, COLS.indexOf(c)));
 for (const c of COLS.slice(3, 5)) $("y").add(new Option(c, COLS.indexOf(c)));
@@ -67,50 +72,81 @@ function status(text, warn) {
   $("status").className = warn ? "warn" : "";
 }
 
+const fileMg = f => round(f.mass * 1000, 6);
+
+// table, mass and info follow the selected file; the plot overlays all files
 function render() {
-  if (!data) return;
-  const mg = parseFloat($("mass").value);
-  if (!(mg > 0)) return status("Invalid mass", true);
-  shown = formatRows(data.rows, data.mass, mg / 1000);
+  const cur = files[$("active").value];
+  $("main").style.display = cur ? "grid" : "none";
+  if (chart) chart.destroy();
+  if (!cur) { shown = []; return; }
+
+  shown = formatRows(cur.rows, cur.mass, cur.mg / 1000);
   $("tbody").innerHTML = shown.map(r => "<tr>" + r.map(v => `<td>${v}</td>`).join("") + "</tr>").join("");
-  const fileMg = round(data.mass * 1000, 6);
-  status(Math.abs(mg - fileMg) < 1e-9 ? "" : `Mass changed: file has ${fileMg} mg`, true);
+  $("info").textContent = cur.info;
+  status(Math.abs(cur.mg - fileMg(cur)) < 1e-9 ? "" : `Mass changed: file has ${fileMg(cur)} mg`, true);
 
   const xi = +$("x").value, yi = +$("y").value;
-  if (chart) chart.destroy();
   chart = new Chart($("chart"), {
     type: "scatter",
-    data: {datasets: [{data: shown.map(r => ({x: r[xi], y: r[yi]})), showLine: true,
-                       borderColor: "#1f77b4", backgroundColor: "#1f77b4"}]},
+    data: {datasets: files.map((f, i) => ({
+      label: f.name,
+      data: formatRows(f.rows, f.mass, f.mg / 1000).map(r => ({x: r[xi], y: r[yi]})),
+      showLine: true, borderColor: COLORS[i % COLORS.length], backgroundColor: COLORS[i % COLORS.length],
+    }))},
     options: {
       animation: false,
-      plugins: {legend: {display: false}, title: {display: true, text: data.name}},
+      plugins: {legend: {display: files.length > 1}, title: {display: files.length === 1, text: cur.name}},
       scales: {x: {title: {display: true, text: COLS[xi]}}, y: {title: {display: true, text: COLS[yi]}}},
     },
   });
 }
 
-async function load(file) {
-  try {
-    data = parseSMP(await file.arrayBuffer());
-  } catch (e) {
-    return status("Cannot read file: " + e.message, true);
-  }
-  $("main").style.display = "grid";
-  $("fname").textContent = file.name;
-  $("info").textContent = data.info;
-  $("mass").value = round(data.mass * 1000, 6);
+function select(i) {
+  $("active").innerHTML = "";
+  files.forEach((f, j) => $("active").add(new Option(f.name, j)));
+  if (files.length) {
+    $("active").value = Math.min(i, files.length - 1);
+    $("mass").value = files[$("active").value].mg;
+  } else $("mass").value = "";
+  status("");
   render();
 }
 
+async function load(list) {
+  const errors = [];
+  for (const file of list) {
+    try {
+      const d = parseSMP(await file.arrayBuffer());
+      files.push({...d, mg: fileMg(d)});
+    } catch (e) {
+      errors.push(`${file.name}: ${e.message}`);
+    }
+  }
+  select(files.length - 1);
+  if (errors.length) status("Cannot read " + errors.join("; "), true);
+}
+
 $("pick").onclick = () => $("file").click();
-$("file").onchange = e => e.target.files[0] && load(e.target.files[0]);
+$("file").onchange = e => { load([...e.target.files]); e.target.value = ""; };
 $("drop").ondragover = e => { e.preventDefault(); $("drop").classList.add("over"); };
 $("drop").ondragleave = () => $("drop").classList.remove("over");
-$("drop").ondrop = e => { e.preventDefault(); $("drop").classList.remove("over"); load(e.dataTransfer.files[0]); };
-$("mass").oninput = render;
+$("drop").ondrop = e => { e.preventDefault(); $("drop").classList.remove("over"); load([...e.dataTransfer.files]); };
+$("active").onchange = () => select(+$("active").value);
+$("remove").onclick = () => { const i = +$("active").value; files.splice(i, 1); select(i); };
+$("clear").onclick = () => { files = []; select(0); };
+$("mass").oninput = () => {
+  const cur = files[$("active").value], mg = parseFloat($("mass").value);
+  if (!cur) return;
+  if (!(mg > 0)) return status("Invalid mass", true);
+  cur.mg = mg;
+  render();
+};
 $("x").onchange = $("y").onchange = render;
-$("reset").onclick = () => { if (data) { $("mass").value = round(data.mass * 1000, 6); render(); } };
+$("reset").onclick = () => {
+  const cur = files[$("active").value];
+  if (cur) { cur.mg = fileMg(cur); $("mass").value = cur.mg; render(); }
+};
 $("copy").onclick = async () => {
   if (!shown.length) return;
   const lines = ($("headers").checked ? [COLS] : []).concat(shown).map(r => r.join("\t"));
