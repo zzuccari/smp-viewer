@@ -30,7 +30,7 @@
 <h1>3Flex SMP viewer</h1>
 <p class="sub">Reads Micromeritics 3Flex .SMP files in your browser. The file is not uploaded anywhere.</p>
 
-<div id="drop">Drop a .SMP file here or <input type="file" id="file" accept=".smp,.SMP"></div>
+<div id="drop">Drop a .SMP file here or <button id="pick">Choose file</button> <span id="fname"></span><input type="file" id="file" accept=".smp,.SMP" hidden></div>
 
 <div class="bar">
   <button id="copy">Copy table</button>
@@ -97,11 +97,13 @@ async function load(file) {
     return status("Cannot read file: " + e.message, true);
   }
   $("main").style.display = "grid";
+  $("fname").textContent = file.name;
   $("info").textContent = data.info;
   $("mass").value = round(data.mass * 1000, 6);
   render();
 }
 
+$("pick").onclick = () => $("file").click();
 $("file").onchange = e => e.target.files[0] && load(e.target.files[0]);
 $("drop").ondragover = e => { e.preventDefault(); $("drop").classList.add("over"); };
 $("drop").ondragleave = () => $("drop").classList.remove("over");
